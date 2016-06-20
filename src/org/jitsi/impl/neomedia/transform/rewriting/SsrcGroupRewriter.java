@@ -19,7 +19,7 @@ import java.io.*;
 import java.util.*;
 import net.sf.fmj.media.rtp.*;
 import org.jitsi.impl.neomedia.*;
-import org.jitsi.impl.neomedia.codec.video.*;
+import org.jitsi.impl.neomedia.codec.video.vp8.*;
 import org.jitsi.impl.neomedia.rtcp.*;
 import org.jitsi.impl.neomedia.rtcp.termination.strategies.*;
 import org.jitsi.service.neomedia.*;
@@ -101,7 +101,7 @@ class SsrcGroupRewriter
      * timestamp older than what the endpoint has already seen, we overwrite
      * the timestamp with maxTimestamp + 1.
      */
-    public long maxTimestamp;
+    public long maxTimestamp = -1;
 
     /**
      * The current <tt>SsrcRewriter</tt> that we use to rewrite source
@@ -489,8 +489,14 @@ class SsrcGroupRewriter
         // timestamps have advanced "a lot" (i.e. > 3000 or 3000/90 = 33ms).
 
         long timestamp = p.getTimestamp();
+
+        if (maxTimestamp == -1) // Initialize maxTimestamp.
+        {
+            maxTimestamp = timestamp - 1;
+        }
+
         long minTimestamp = maxTimestamp + 1;
-        long delta = timestamp - minTimestamp;
+        long delta = TimeUtils.rtpDiff(timestamp, minTimestamp);
 
         if (delta < 0) /* minTimestamp is inclusive */
         {
@@ -504,7 +510,7 @@ class SsrcGroupRewriter
                         + minTimestamp);
             }
 
-            if (delta < -3000)
+            if (delta < -300000 && WARN)
             {
                 // Bail-out. This is not supposed to happen because it means
                 // that more than one frame has to be uplifted, which means that
@@ -512,18 +518,12 @@ class SsrcGroupRewriter
                 // switching on neighboring frames and neighboring frames are
                 // sampled at similar instances).
 
-                if (WARN)
-                {
-
-                    logger.warn(
-                        "BAILING OUT to uplift RTP timestamp " + timestamp
-                            + " with SEQNUM " + p.getSequenceNumber()
-                            + " from SSRC " + p.getSSRCAsLong()
-                            + " because of " + delta + " (delta > 3000) to "
-                            + minTimestamp);
-                }
-
-                return;
+                logger.warn(
+                    "Uplifting a HIGHLY suspicious RTP timestamp "
+                        + timestamp + " with SEQNUM "
+                        + p.getSequenceNumber() + " from SSRC "
+                        + p.getSSRCAsLong() + " because of delta=" + delta +
+                        " to " + minTimestamp);
             }
 
             p.setTimestamp(minTimestamp);
@@ -533,7 +533,7 @@ class SsrcGroupRewriter
             // FIXME If the delta is >>> 3000 it could mean problems as well.
         }
 
-        if (maxTimestamp < timestamp)
+        if (TimeUtils.rtpDiff(maxTimestamp, timestamp) < 0)
         {
             maxTimestamp = timestamp;
         }

@@ -13,26 +13,36 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.jitsi.impl.neomedia.transform.srtp;
+package org.jitsi.impl.neomedia;
 
-import org.bouncycastle.crypto.*;
+import org.jitsi.impl.neomedia.transform.rtcp.*;
 
 /**
- * Defines the application programming interface (API) of a factory of
- * <tt>org.bouncycastle.crypto.BlockCipher</tt> instances.
+ * Media stream statistics implementation per send SSRC.
  *
- * @author Lyubomir Marinov
+ * @author Damian Minkov
  */
-public interface BlockCipherFactory
+public class MediaStreamSentSSRCStats
+    extends AbstractMediaStreamSSRCStats
 {
+    MediaStreamSentSSRCStats(long ssrc, StatisticsEngine statisticsEngine)
+    {
+        super(ssrc, statisticsEngine);
+    }
+
     /**
-     * Initializes a new <tt>BlockCipher</tt> instance.
-     * @param keySize AES key size (16, 24, 32 bytes)
-     *
-     * @return a new <tt>BlockCipher</tt> instance
-     * @throws Exception if anything goes wrong while initializing a new
-     * <tt>BlockCipher</tt> instance
+     * {@inheritDoc}
      */
-    public BlockCipher createBlockCipher(int keySize)
-        throws Exception;
+    public long getNbBytes()
+    {
+        return statisticsEngine.getNbBytesSent(ssrc);
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    public long getNbPackets()
+    {
+        return statisticsEngine.getRtpPacketsSent(ssrc);
+    }
 }

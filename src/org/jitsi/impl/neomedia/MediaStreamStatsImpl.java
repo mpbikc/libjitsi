@@ -31,7 +31,6 @@ import net.sf.fmj.media.rtp.*;
 
 import org.jitsi.impl.neomedia.device.*;
 import org.jitsi.impl.neomedia.rtcp.*;
-import org.jitsi.impl.neomedia.rtp.*;
 import org.jitsi.impl.neomedia.rtp.remotebitrateestimator.*;
 import org.jitsi.impl.neomedia.transform.rtcp.*;
 import org.jitsi.service.neomedia.*;
@@ -66,6 +65,12 @@ public class MediaStreamStatsImpl
      */
     private static final Logger logger
         = Logger.getLogger(MediaStreamStatsImpl.class);
+
+    /**
+     * List of stats per ssrc.
+     */
+    private final Map<Long,AbstractMediaStreamSSRCStats>[] mediaStreamStats
+        = new Map[] { new HashMap<>(), new HashMap<>() };
 
     /**
      * Computes an Exponentially Weighted Moving Average (EWMA). Thus, the most
@@ -390,26 +395,32 @@ public class MediaStreamStatsImpl
      */
     public static int getRoundTripDelay(long timeMs, long lsr, long dlsr)
     {
-        int roundTripDelay = -1;
+        long ntpTime = TimeUtils.toNtpTime(timeMs);
+        ntpTime = TimeUtils.toNtpShortFormat(ntpTime);
 
-        if (lsr > 0)
+        long ntprtd = ntpTime - lsr - dlsr;
+
+        long delayLong;
+        if (ntprtd >= 0)
         {
-            long ntpTime = TimeUtils.toNtpTime(timeMs);
-            ntpTime = TimeUtils.toNtpShortFormat(ntpTime);
-
-            long ntprtd = ntpTime - lsr - dlsr;
-
-            if (ntprtd > 0)
-            {
-                long delayLong = TimeUtils.ntpShortToMs(ntprtd);
-                if (delayLong < Integer.MAX_VALUE)
-                {
-                    roundTripDelay = (int) delayLong;
-                }
-            }
+            delayLong = TimeUtils.ntpShortToMs(ntprtd);
+        }
+        else
+        {
+            /*
+             * Even if ntprtd is negative we compute delayLong
+             * as it might round to zero.
+             * ntpShortToMs expect positive numbers.
+             */
+            delayLong = -TimeUtils.ntpShortToMs(-ntprtd);
         }
 
-        return roundTripDelay;
+        if (delayLong >= 0 && delayLong < Integer.MAX_VALUE)
+        {
+            return (int) delayLong;
+        }
+
+        return -1;
     }
 
     /**
@@ -821,24 +832,23 @@ public class MediaStreamStatsImpl
      * @param streamDirection The stream direction (DOWNLOAD or UPLOAD) of the
      * stream from which this function retrieve the number of sent/received
      * bytes.
-     *
      * @return the number of sent/received bytes for this stream.
      */
     private long getNbBytes(StreamDirection streamDirection)
     {
-        StreamRTPManager rtpManager = mediaStreamImpl.queryRTPManager();
+        StatisticsEngine statisticsEngine
+            = mediaStreamImpl.getStatisticsEngine();
         long nbBytes = 0;
 
-        if(rtpManager != null)
+        if (statisticsEngine != null)
         {
-            switch(streamDirection)
+            switch (streamDirection)
             {
             case DOWNLOAD:
-                nbBytes = rtpManager.getGlobalReceptionStats().getBytesRecd();
+                nbBytes = statisticsEngine.getNbBytesReceived();
                 break;
             case UPLOAD:
-                nbBytes
-                    = rtpManager.getGlobalTransmissionStats().getBytesSent();
+                nbBytes = statisticsEngine.getNbBytesSent();
                 break;
             }
         }
@@ -979,25 +989,23 @@ public class MediaStreamStatsImpl
      * @param streamDirection The stream direction (DOWNLOAD or UPLOAD) of the
      * stream from which this function retrieve the number of sent/received
      * packets.
-     *
      * @return the number of packets sent/received for this stream.
      */
     private long getNbPDU(StreamDirection streamDirection)
     {
+        StatisticsEngine statisticsEngine
+            = mediaStreamImpl.getStatisticsEngine();
         // We don't use the values from the RTPManager, because they are
         // incorrect when an RTPTranslator is used.
         long nbPDU = 0;
 
-        StatisticsEngine statisticsEngine
-                = mediaStreamImpl.getStatisticsEngine();
         if (statisticsEngine != null)
         {
-            switch(streamDirection)
+            switch (streamDirection)
             {
             case UPLOAD:
                 nbPDU = statisticsEngine.getRtpPacketsSent();
                 break;
-
             case DOWNLOAD:
                 nbPDU = statisticsEngine.getRtpPacketsReceived();
                 break;
@@ -1289,6 +1297,8 @@ public class MediaStreamStatsImpl
         // deviation of the jitter.
         jitterRTPTimestampUnits[streamDirection.ordinal()]
             = feedback.getJitter();
+        getStats(feedback.getSSRC(), streamDirection)
+            .setJitter(rtpTimeToMs(feedback.getJitter()));
     }
 
     /**
@@ -1380,7 +1390,9 @@ public class MediaStreamStatsImpl
         // Updates the loss rate with the RTCP sender report feedback, since
         // this is the only information source available for the upload stream.
         long uploadNewNbRecv = feedback.getXtndSeqNum();
+
         nbPacketsLostUpload = feedback.getNumLost();
+
         long newNbLost
             = nbPacketsLostUpload - nbLost[streamDirection.ordinal()];
         long nbSteps = uploadNewNbRecv - uploadFeedbackNbPackets;
@@ -1397,6 +1409,8 @@ public class MediaStreamStatsImpl
         if (rtt >= 0)
         {
             setRttMs(rtt);
+
+            getStats(feedback.getSSRC(), streamDirection).setRttMs(rtt);
         }
     }
 
@@ -1631,5 +1645,49 @@ public class MediaStreamStatsImpl
         }
 
         return sbr;
+    }
+
+    /**
+     * Returns the stat for the ssrc and direction.
+     * @param ssrc the ssrc
+     * @param streamDirection the direction.
+     * @return the object holding all the stats.
+     */
+    private AbstractMediaStreamSSRCStats getStats(
+        long ssrc, StreamDirection streamDirection)
+    {
+        Map<Long,AbstractMediaStreamSSRCStats> stats
+            = mediaStreamStats[streamDirection.ordinal()];
+        AbstractMediaStreamSSRCStats stat = stats.get(ssrc);
+
+        if (stat == null)
+        {
+            StatisticsEngine statisticsEngine
+                = mediaStreamImpl.getStatisticsEngine();
+
+            if (streamDirection == StreamDirection.DOWNLOAD)
+                stat = new MediaStreamReceivedSSRCStats(ssrc, statisticsEngine);
+            else
+                stat = new MediaStreamSentSSRCStats(ssrc, statisticsEngine);
+
+            stats.put(ssrc, stat);
+        }
+        return stat;
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    public Collection<? extends MediaStreamSSRCStats> getReceivedStats()
+    {
+        return mediaStreamStats[StreamDirection.DOWNLOAD.ordinal()].values();
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    public Collection<? extends MediaStreamSSRCStats> getSentStats()
+    {
+        return mediaStreamStats[StreamDirection.UPLOAD.ordinal()].values();
     }
 }

@@ -173,8 +173,7 @@ public class MediaStreamImpl
      * {@link this.rtpManager}, given that it offers this information with its
      * getLocalSSRC() method? TAG(cat4-local-ssrc-hurricane)
      */
-    private long localSourceID
-        = Math.abs(new Random().nextLong()) % Integer.MAX_VALUE;
+    private long localSourceID = (new Random().nextInt()) & 0x00000000FFFFFFFFL;
 
     /**
      * The MediaStreamStatsImpl object used to compute the statistics about
@@ -339,7 +338,7 @@ public class MediaStreamImpl
     /**
      * The chain used to by the RTPConnector to transform packets.
      */
-    private TransformEngine transformEngineChain;
+    private TransformEngineChain transformEngineChain;
 
     /**
      * The {@code RetransmissionRequesterImpl} instance for this
@@ -3645,5 +3644,20 @@ public class MediaStreamImpl
     public RetransmissionRequester getRetransmissionRequester()
     {
         return retransmissionRequester;
+    }
+
+    /**
+     * {@inheritDoc}
+     * <br/>
+     * Note that the chain is only initialized when a {@link StreamConnector} is
+     * set for the {@link MediaStreamImpl} via
+     * {@link #setConnector(StreamConnector)} or by passing a non-null connector
+     * to the constructor. Until the chain is initialized, this method will
+     * return null.
+     */
+    @Override
+    public TransformEngineChain getTransformEngineChain()
+    {
+        return transformEngineChain;
     }
 }
